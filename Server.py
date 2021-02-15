@@ -3,7 +3,9 @@ import ssl
 import time
 import _thread
 
-from Utils import check_connection
+from scapy.layers.dns import DNS, DNSQR
+from scapy.layers.inet import IP, UDP
+from scapy.sendrecv import send, sniff
 
 host = '127.0.0.1'
 port = 5000
@@ -28,36 +30,46 @@ def handle_new_client(client_socket, address):
                                     certfile="./assets/cert.pem", cert_reqs=ssl.CERT_NONE,
                                     ssl_version=ssl.PROTOCOL_SSLv23)
 
-    run_thread = True
-    while run_thread:
+    clients.append(Client(address, (address[0], -1)))
+    sniff(filter=f"tcp port {server_receiver_socket.getsockname()[1]} and ip dst "
+                 f"{server_receiver_socket.getsockname()[0]}", prn=handle_incoming_data(address))
+
+
+def handle_incoming_data(address):
+    def get_data(pkt: IP):
         try:
-            client_message = client_socket.read(1024)
+            client_message = pkt[DNSQR].qname[:-1].decode('utf-8')
 
-            if client_port == -1:
-                client_port = client_message
-                clients.append(Client(address, (address[0], int(client_port))))
+            add_new_client = False
+            for client in clients:
+                if client.receiver_socket[1] == -1 and client.sender_socket == address:
+                    add_new_client = True
+                    client.receiver_socket = (client.receiver_socket[0], int(client_message))
 
-            else:
-                print(time.ctime(time.time()) + str(address) + " => " + str(client_message.decode('utf-8')))
+            if not add_new_client:
+                print(time.ctime(time.time()) + str(address) + " => " + str(client_message))
 
                 for client in clients:
                     if client.sender_socket != address:
                         try:
-                            check_connection(client.receiver_socket[0])
-                            server_sender_socket.sendto(client_message, client.receiver_socket)
-                            print("Message was sent to", client)
+                            if client.receiver_socket[1] != -1:
+                                p = IP(dst=client.receiver_socket[0]) / UDP(dport=client.receiver_socket[1]) \
+                                    / DNS(rd=1, qd=DNSQR(qname=client_message))
+                                print(client.receiver_socket[1])
+                                send(p, verbose=0)
+                                print("Message was sent to", client)
                         except socket.error as err:
                             print(err)
         except socket.error as err:
             print(err)
-            run_thread = False
             clients_to_remove.append(address)
+    return get_data
 
 
 def handle_server_commands():
     while running:
         command = input("Please Enter 'Shutdown' To Stop The Server!\n")
-        if command == 'shutdown':
+        if command.lower() == 'shutdown':
             shutdown_server()
 
 

@@ -1,9 +1,10 @@
 import socket
 import ssl
 import threading
-from scapy.layers.dns import DNS, DNSQR
-from scapy.layers.inet import IP, UDP
-from scapy.sendrecv import sr1
+
+from scapy.layers.dns import DNSQR, DNS
+from scapy.layers.inet import IP, TCP, UDP
+from scapy.sendrecv import sniff, send
 
 from Utils import check_connection
 
@@ -12,38 +13,39 @@ host = 'localhost'
 shutdown = False
 
 
-def get_server_ip(dns_server_ip, dns_query_name):
-    dns_req = IP(dst=dns_server_ip) / \
-              UDP(dport=53) / \
-              DNS(rd=1, qd=DNSQR(qname=dns_query_name))
-    answer = sr1(dns_req, verbose=0)
-    return str(answer[DNS].an[0].rdata)
-
-
 def handle_communication():
     # Send Receiver Socket Information.
-    ip, new_port = client_receiver_socket.getsockname()
-    client_sender_socket.write(bytes(str(new_port), 'utf-8'))
+    # client_sender_socket.write(bytes(str(new_port), 'utf-8'))
 
     alias = input("Name: ")
+
+    ip, new_port = client_receiver_socket.getsockname()
+    p = IP(dst=server[0]) / TCP(dport=server[1]) \
+        / DNS(rd=1, qd=DNSQR(qname=str(new_port)))
+    send(p, verbose=0)
 
     print("Please Enter Your Messages!\n")
     message = input("")
 
     while message != 'q':
         if message != '':
-            check_connection(server[0])
-            client_sender_socket.write(bytes(alias + ": " + message, 'utf-8'))
+            p = IP(dst=server[0]) / TCP(dport=server[1]) \
+                / DNS(rd=1, qd=DNSQR(qname=(alias + ": " + message)))
+            send(p, verbose=0)
+            # client_sender_socket.write(bytes(alias + ": " + message, 'utf-8'))
         message = input("")
 
 
-def receive_data(name, sock):
-    while not shutdown:
-        try:
-            data, address = sock.recvfrom(1024)
-            print(str('\r' + data.decode('utf-8')))
-        except socket.error as err:
-            print(err)
+def incoming_data_handler(thread_name, sock):
+    def receive_data():
+        def get_data(pkt: IP):
+            print(pkt[UDP].dport, sock.getsockname()[1])
+            if pkt[UDP].dport == sock.getsockname()[1]:
+                print(str(pkt[DNSQR].qname.decode('utf-8')))
+
+        return get_data
+
+    sniff(filter=f"udp port {sock.getsockname()[1]} and ip dst {sock.getsockname()[0]}", prn=receive_data())
 
 
 def close_connection():
@@ -55,7 +57,7 @@ def close_connection():
     client_receiver_socket.close()
 
 
-server = (get_server_ip('127.0.0.1', 'david.server.com'), 5000)
+server = ('127.0.0.1', 5000)
 
 context = ssl.SSLContext(ssl.PROTOCOL_SSLv23)
 context.verify_mode = ssl.CERT_REQUIRED
@@ -71,7 +73,7 @@ client_receiver_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)  # UDP
 client_receiver_socket.bind((host, port))
 client_receiver_socket.setblocking(True)
 
-rT = threading.Thread(target=receive_data, args=("receive_thread", client_receiver_socket))
+rT = threading.Thread(target=incoming_data_handler, args=("receive_thread", client_receiver_socket))
 rT.start()
 
 handle_communication()
